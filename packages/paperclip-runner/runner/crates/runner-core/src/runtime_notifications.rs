@@ -16,6 +16,7 @@ use crate::durable::{
 };
 
 pub const CONTEXT_ENV: &str = "PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT";
+pub const HELPER_ENV: &str = "PAPERCLIP_RUNTIME_NOTIFICATION_HELPER";
 const MAX_FRAME: usize = 2048;
 
 pub fn context_path(state_dir: &Path) -> PathBuf {

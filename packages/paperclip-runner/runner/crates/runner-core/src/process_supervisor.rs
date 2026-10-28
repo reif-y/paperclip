@@ -1035,6 +1035,7 @@ impl SupervisedProcess {
             .stderr(Stdio::piped());
         for key in [
             "PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT",
+            "PAPERCLIP_RUNTIME_NOTIFICATION_HELPER",
             "PATH",
             "PATHEXT",
             "SystemRoot",

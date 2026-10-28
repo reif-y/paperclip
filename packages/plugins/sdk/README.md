@@ -268,10 +268,14 @@ A runtime client captures Runner's opaque activation context before an eligible
 operation, then sends a structured notification after successful use:
 
 ```sh
-context=$(paperclip-runnerd notification-context)
+context=$("$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notification-context)
 # Perform the operation; notify only on success.
-paperclip-runnerd notify-task-panel "$context" example.live-view screen
+"$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notify-task-panel "$context" example.live-view screen
 ```
+
+Runner publishes its matching executable as host-owned
+`PAPERCLIP_RUNTIME_NOTIFICATION_HELPER`; clients invoke that absolute path and
+need no Runner command on `PATH`. Configured task environment cannot override it.
 
 Runner supplies `PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT`, a stable path to its
 local notification endpoint descriptor. The helper uses bounded JSON-RPC over a

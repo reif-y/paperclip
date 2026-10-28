@@ -139,3 +139,7 @@ production adapter.
 path is host-owned `PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT`; no caller run ID is
 accepted. The context is invalidated on warm attachment and process recovery.
 These UI hints use the ordinary durable outbox and add no authorization.
+
+Runner publishes its matching executable as host-owned
+`PAPERCLIP_RUNTIME_NOTIFICATION_HELPER`; clients invoke that absolute path and
+need no Runner command on `PATH`. Configured task environment cannot override it.

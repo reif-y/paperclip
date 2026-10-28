@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use paperclip_runner_core::durable::{DurableRunnerConfig, DurableState, DurableStateStore};
 use paperclip_runner_core::runtime_notifications::{
-    context_path, RuntimeNotifications, CONTEXT_ENV,
+    context_path, RuntimeNotifications, CONTEXT_ENV, HELPER_ENV,
 };
 
 fn helper(
@@ -18,14 +18,16 @@ fn helper(
     store: &DurableStateStore,
     args: &[&str],
 ) -> Output {
-    let child = Command::new(env!("CARGO_BIN_EXE_paperclip-runnerd"))
-        .env(CONTEXT_ENV, context_path(&config.state_dir))
-        .env("PAPERCLIP_RUN_ID", "stale-process-run")
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let child =
+        Command::new(std::env::var_os(HELPER_ENV).expect("Runner publishes its matching helper"))
+            .env("PATH", "/usr/bin:/bin")
+            .env(CONTEXT_ENV, context_path(&config.state_dir))
+            .env("PAPERCLIP_RUN_ID", "stale-process-run")
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
     let client = thread::spawn(move || child.wait_with_output().unwrap());
     let deadline = Instant::now() + Duration::from_secs(3);
     while !client.is_finished() && Instant::now() < deadline {
@@ -66,11 +68,12 @@ fn real_cli_uses_runner_context_and_never_process_run_identity() {
     state.lifecycle = "ready".into();
     let mut server = RuntimeNotifications::bind(&path).unwrap();
     std::env::set_var(CONTEXT_ENV, context_path(&path));
+    std::env::set_var(HELPER_ENV, env!("CARGO_BIN_EXE_paperclip-runnerd"));
     let mut provider = paperclip_runner_core::process_supervisor::SupervisedProcess::spawn(
         std::path::Path::new("/bin/sh"),
         &[
             "-c".into(),
-            "printf '%s\\n' \"$PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT\"".into(),
+            "printf '%s\\n' \"$PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT\" \"$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER\"".into(),
         ],
         Duration::from_millis(100),
         2048,
@@ -82,8 +85,13 @@ fn real_cli_uses_runner_context_and_never_process_run_identity() {
             .unwrap(),
         Some(context_path(&path).to_string_lossy().into_owned())
     );
+    assert_eq!(
+        provider
+            .receive_stdout_line(Duration::from_secs(1))
+            .unwrap(),
+        Some(env!("CARGO_BIN_EXE_paperclip-runnerd").to_owned())
+    );
     provider.wait().unwrap();
-    std::env::remove_var(CONTEXT_ENV);
     let captured = helper(
         &mut server,
         &config,
@@ -109,6 +117,8 @@ fn real_cli_uses_runner_context_and_never_process_run_identity() {
     let stale = helper(&mut server, &config, &mut state, &store, &args);
     assert!(!stale.status.success());
     assert_eq!(state.outbox.len(), 1);
+    std::env::remove_var(CONTEXT_ENV);
+    std::env::remove_var(HELPER_ENV);
     drop(server);
     fs::remove_dir_all(path).unwrap();
 }
