@@ -131,3 +131,11 @@ The files in `fixtures/local-runner/scripts/` drive the package-local fake
 harness. They cover successful, failed, interrupted, interactive, duplicate
 terminal, process-cleanup, and oversized-frame behavior without starting a
 production adapter.
+
+`task.panel.activated` is a P1 Runner event in v1, v2 and v3 with exactly
+`{ pluginKey, slotId }`. Local clients capture an opaque context using
+`paperclip-runnerd notification-context` before an operation and invoke
+`notify-task-panel CONTEXT PLUGIN_KEY SLOT_ID` after success. The endpoint descriptor
+path is host-owned `PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT`; no caller run ID is
+accepted. The context is invalidated on warm attachment and process recovery.
+These UI hints use the ordinary durable outbox and add no authorization.

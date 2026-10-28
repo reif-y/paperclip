@@ -1,5 +1,5 @@
-import { observeTaskPanelActivations, readTaskPanelActivations, recordTaskPanelActivation } from "../services/plugin-task-panels.js";
-import { plugins } from "@paperclipai/db";
+import { readTaskPanelActivations } from "../services/plugin-task-panels.js";
+import { plugins, heartbeatRunEvents } from "@paperclipai/db";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -46,49 +46,26 @@ describe("live-event run read boundaries", () => {
     await temporary?.cleanup();
   });
 
-  it.each(["disabled", "error", "upgrade_pending"] as const)("activates a recovered %s plugin on later use in the same run", async status => {
+  it.each(["ready", "disabled", "error", "upgrade_pending"] as const)("restores a structured activation for an installed %s plugin", async status => {
     const companyId = randomUUID(), pluginKey = `example.recovered-${status}`;
     await db.insert(companies).values({ id: companyId, name: "Panel recovery", issuePrefix: `PNL${status.toUpperCase()}` });
     const [agent] = await db.insert(agents).values({ companyId, name: "Panel fixture", adapterType: "process" }).returning();
     const [run] = await db.insert(heartbeatRuns).values({ companyId, agentId: agent.id, status: "running" }).returning();
     await db.insert(plugins).values({ pluginKey, packageName: pluginKey, version: "1.0.0", status,
       manifestJson: { ui: { slots: [{ type: "detailTab", id: "screen", entityTypes: ["agent"], taskSidePanel: { availabilityPath: "/agents/:entityId/ready" } }] } } as never });
-    const observe = observeTaskPanelActivations(panel => recordTaskPanelActivation(db, { companyId, runId: run.id, agentId: agent.id, issueId: null }, panel));
-    const output = { output: `[paperclip-task-panel:${pluginKey}:screen]` };
-    await observe("event", output);
-    expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([]);
-    await db.update(plugins).set({ status: "ready" }).where(eq(plugins.pluginKey, pluginKey));
-    await observe("event", output);
-    await observe("event", output);
+    const write = (seq: number, panel: unknown) => db.insert(heartbeatRunEvents).values({ companyId, agentId: agent.id, runId: run.id,
+      seq, eventType: "task.panel.activated", payload: { prpEvent: { sourceKind: "runner", eventType: "task.panel.activated", payload: panel } } });
+    await write(1, { pluginKey, slotId: "screen" });
+    await write(2, { pluginKey, slotId: "unknown-slot" });
+    await write(3, { pluginKey: "uninstalled-plugin", slotId: "screen" });
+    await write(4, { pluginKey, slotId: "screen" }); // Recovery may repeat a panel with a new source ID.
+    await write(5, { pluginKey, slotId: "screen", runId: "caller-run" });
+    await db.insert(heartbeatRunEvents).values({ companyId, agentId: agent.id, runId: run.id, seq: 6,
+      eventType: "task.panel.activated", payload: { prpEvent: { sourceKind: "control_plane", eventType: "task.panel.activated", payload: { pluginKey, slotId: "screen" } } } });
     expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([{ pluginKey, slotId: "screen" }]);
-  });
-
-  it("rejects percent-encoded registered secrets as panel identifiers before storage or broadcast", async () => {
-    const companyId = randomUUID();
-    await db.insert(companies).values({ id: companyId, name: "Panel secret test", issuePrefix: "PNLSEC" });
-    const [agent] = await db.insert(agents).values({ companyId, name: "Panel fixture", adapterType: "process" }).returning();
-    const [run] = await db.insert(heartbeatRuns).values({ companyId, agentId: agent.id, status: "running" }).returning();
-    const pluginKey = "example.secure-view";
-    await db.insert(plugins).values({ pluginKey, packageName: pluginKey, version: "1.0.0", status: "ready",
-      manifestJson: { ui: { slots: [{ type: "detailTab", id: "screen", entityTypes: ["agent"], taskSidePanel: { availabilityPath: "/agents/:entityId/ready" } }] } } as never });
-    const secret = "registered-panel-secret-fixture";
-    await createRunSecretRedactionRegistry(db).register(companyId, run.id, secret);
-    const seen: unknown[] = [];
-    const unsubscribe = subscribeCompanyLiveEvents(companyId, event => { seen.push(event); });
-    const observe = observeTaskPanelActivations(panel => recordTaskPanelActivation(db, { companyId, runId: run.id, agentId: agent.id, issueId: null }, panel));
-    const encoded = [...secret].map(char => `%${char.charCodeAt(0).toString(16)}`).join("");
-    try {
-      await observe("stderr", `[paperclip-task-panel:${encoded}:screen]`);
-      await observe("stderr", `\n[paperclip-task-panel:${pluginKey}:${encoded}]`);
-      expect(seen).toEqual([]);
-      expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([]);
-      await observe("stderr", `\n[paperclip-task-panel:${pluginKey}:screen]`);
-      const response = await readTaskPanelActivations(db, companyId, run.id);
-      expect(response).toEqual([{ pluginKey, slotId: "screen" }]);
-      expect(JSON.stringify(response)).not.toContain(secret);
-      expect(JSON.stringify(seen)).not.toContain(secret);
-      expect(seen).toHaveLength(1);
-    } finally { unsubscribe(); }
+    expect(await readTaskPanelActivations(db, randomUUID(), run.id)).toEqual([]);
+    await db.update(plugins).set({ status: "uninstalled" }).where(eq(plugins.pluginKey, pluginKey));
+    expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([]);
   });
 
   it("reads only run bindings and reauthorizes every delivery after revocation or deletion", async () => {
@@ -277,10 +254,10 @@ describe("live-event run read boundaries", () => {
     const registry = createRunSecretRedactionRegistry(db);
     await registry.register(companyId, run.id, registered);
     await instanceSettingsService(db).updateGeneral({ censorUsernameInLogs: true });
-    const body = kind === "panel" ? { pluginKey: `example.${registered}`, slotId: `${homedir()}/synthetic.txt` }
+    const body = kind === "panel" ? { prpEvent: { eventType: "task.panel.activated", sourceKind: "runner", payload: { pluginKey: `example.${registered}`, slotId: `${homedir()}/synthetic.txt` } } }
       : { prpEvent: { eventType: "item.delta", payload: { kind: "agentMessage",
         text: `${homedir()}/synthetic.txt ${registered}`, password: "sensitive-key-sentinel" } } };
-    const sourcePayload = { runId: run.id, agentId: agent.id, seq: 1, eventType: kind === "panel" ? "plugin.task_panel" : "item.delta", payload: body };
+    const sourcePayload = { runId: run.id, agentId: agent.id, seq: 1, eventType: kind === "panel" ? "task.panel.activated" : "item.delta", payload: body };
     const expected = await registry.redactForRun(companyId, run.id,
       redactCurrentUserValue({ ...sourcePayload, payload: redactEventPayload(body) }, { enabled: true }));
     const queries: string[] = [];

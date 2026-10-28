@@ -22,6 +22,11 @@ describe("ACPX launch environment", () => {
     expect(launch.ACPX_CLAUDE_INCLUDE_USER_SETTINGS).toBeUndefined();
     expect(environment.CLAUDE_CONFIG_DIR).toBe(configured);
   });
+  it("retains Runner notification discovery while denying task-supplied overrides", () => {
+    const key = "PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT";
+    expect(createSanitizedAcpxSpawnInput({ [key]: "/private/runner/context" }, "claude").env[key]).toBe("/private/runner/context");
+    expect(configuredEnvironmentProjection({ [key]: "/caller/override" })).not.toHaveProperty(key);
+  });
   it("retains an explicit Claude MCP timeout without inheriting an ambient or sibling setting", () => {
     vi.stubEnv("MCP_TOOL_TIMEOUT", "999999");
     expect(createSanitizedAcpxSpawnInput(undefined, "claude").env).not.toHaveProperty("MCP_TOOL_TIMEOUT");

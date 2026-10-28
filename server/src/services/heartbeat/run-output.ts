@@ -1,4 +1,3 @@
-import { observeTaskPanelActivations, recordTaskPanelActivation } from "../plugin-task-panels.js";
 import { eq } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import type { AdapterInvocationMeta, AdapterRuntimeEvent } from "../../adapters/index.js";
@@ -45,8 +44,6 @@ export function isNewRunLog(
 /** One recorder per execution attempt; the log store itself stays service-scoped. */
 export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput) {
   const { run, runId, issueId, runLogStore, identityRedactor, secretKeys, appendRunEvent, getCurrentUserRedactionOptions } = input;
-  const observePanels = observeTaskPanelActivations(panel =>
-    recordTaskPanelActivation(db, { companyId: run.companyId, agentId: run.agentId, runId: run.id, issueId }, panel));
   let handle: RunLogHandle | null = null;
   let stdoutExcerpt = "";
   let stderrExcerpt = "";
@@ -182,7 +179,6 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
           truncated: payloadChunk.length !== sanitizedChunk.length,
         },
       });
-      await observePanels(stream, chunk);
     };
     const onLog = (stream: "stdout" | "stderr", chunk: string) =>
       appendIdentityRedactedLog(stream, identityRedactor.chunk(stream, chunk));
@@ -216,7 +212,6 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
         message: event.message,
         payload: event.payload,
       });
-      await observePanels("event", event.payload);
     };
 
     return { currentUserRedactionOptions, appendIdentityRedactedLog, onLog, onAdapterMeta, onAdapterEvent };

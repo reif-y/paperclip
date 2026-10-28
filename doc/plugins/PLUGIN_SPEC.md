@@ -376,7 +376,7 @@ export interface PaperclipPluginManifestV1 {
       /** Optional agent detail tab mirrored beside a running task.
        * Declared board GET route scoped to agent :entityId returns { available: boolean }.
        */
-      // Requires a run-scoped plugin.task_panel activation; availability is event-driven.
+      // Requires a run-scoped task.panel.activated Runner event; availability is event-driven.
       taskSidePanel?: { availabilityPath: string };
       /** For page and companySettingsPage: single route segment */
       routePath?: string;

@@ -264,21 +264,26 @@ Agent detail tabs can also appear in task side panels. Add
 slot and declare that exact path as a board-only GET API route with
 `companyResolution: { from: "agent", param: "entityId" }`.
 
-The plugin's runtime automatically emits this exact standalone output line when
-its view first becomes useful (percent-encode both identifiers):
+A runtime client captures Runner's opaque activation context before an eligible
+operation, then sends a structured notification after successful use:
 
-```text
-[paperclip-task-panel:example.live-view:screen]
+```sh
+context=$(paperclip-runnerd notification-context)
+# Perform the operation; notify only on success.
+paperclip-runnerd notify-task-panel "$context" example.live-view screen
 ```
 
-Emit it after successful use, not during help, schema discovery or status probes.
-The host records a `plugin.task_panel` run-log event under the authenticated output
-owner. Only identifiers that match an installed, ready agent task-panel slot can
-be recorded. Arbitrary marker text is rejected, and activation reads/live delivery
-retain run-secret and current-user redaction. The signal supplies no run identity
-or authority. It is a UI hint; normal
-plugin discovery, authorization and availability checks still apply. Quoted source
-and ordinary prose do not match the standalone-line protocol.
+Runner supplies `PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT`, a stable path to its
+local notification endpoint descriptor. The helper uses bounded JSON-RPC over a
+private Unix socket. It does not parse stdout/stderr or take a run ID. Runner
+rejects contexts from earlier warm attachments or process lifetimes and persists
+`task.panel.activated` with `{ pluginKey, slotId }` through its existing
+authenticated PRP event stream before acknowledging. The wrapper treats this
+optional hint as best effort; missing/older runners must not fail the operation.
+Do not notify for help, schema discovery, status probes or failures. No agent
+instruction is required. This is a UI hint; plugin discovery, authorization and
+availability checks still apply. Only installed agent task-panel slots can be
+restored from history, and only ready contributions can render.
 
 The host reads durable activations on mount and reconnect. For activated views it
 replaces `:entityId` with the running agent ID, adds `runId` and `issueId` query
@@ -287,9 +292,8 @@ attempts per activation/recovery, then stops. There is no periodic panel readine
 poll. A first use that happened before the task page opened is restored from the
 saved run event. A later run must produce its own activation, even when a provider
 process or an agent's view stays warm. Only the matching task and running agent
-can contribute a panel. Optional receipt writes have three bounded attempts and
-never reject ordinary source log/event writes or native settlement. A later use or
-source replay can retry a failed receipt without an idle timer.
+can contribute a panel. Notifications are deduplicated per panel and run, and
+durable PRP source replay uses the existing event acknowledgement contract.
 
 The plugin owns availability, labels, content and controls. No private plugin
 identifier or provider protocol belongs in Core. Missing/disabled plugins, failed

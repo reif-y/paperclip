@@ -696,8 +696,9 @@ describe("agent live run routes", () => {
   );
 
   it("reads persisted plugin activation only after normal run-read authorization", async () => {
-    const limit = vi.fn(async () => [{ payload: { pluginKey: "example.live-view", slotId: "screen" } }]);
-    const query = { from: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit };
+    const limit = vi.fn(async () => [{ payload: { pluginKey: "example.live-view", slotId: "screen" },
+      manifest: { ui: { slots: [{ id: "screen", type: "detailTab", entityTypes: ["agent"], taskSidePanel: { availabilityPath: "/agents/:entityId/ready" } }] } } }]);
+    const query = { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit };
     const db = { selectDistinct: vi.fn(() => query) };
     const response = await requestApp(await createApp(db), url => request(url).get(
       "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events?view=plugin-panels"));

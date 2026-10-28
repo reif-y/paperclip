@@ -361,8 +361,7 @@ export function setupLiveEventsWebSocketServer(
       const visible = await visibleEvent(event);
       if (!visible || visible.type !== "heartbeat.run.event") return visible;
       const payload = visible.payload.payload;
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)
-        || (!("prpEvent" in payload) && visible.payload.eventType !== "plugin.task_panel")) return visible;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) || !("prpEvent" in payload)) return visible;
       return redactRunEvent(visible);
     },
       decorate: async visible => {

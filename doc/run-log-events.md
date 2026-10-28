@@ -635,19 +635,18 @@ or resolver error. Recording the diagnostic never contacts a destination.
 
 ## Task plugin panel activation
 
-`plugin.task_panel` records `{ pluginKey, slotId }` when a runtime emits an exact
-standalone `[paperclip-task-panel:PLUGIN_KEY:SLOT_ID]` output line. Both identifiers
-are percent-encoded on the wire. The host supplies company, agent, task and current
-run identity; a warm process cannot attribute the hint using an old environment
-run ID. Replayed source events produce one activation per run/contribution.
-Only installed, ready agent task-panel identifiers are accepted. Reads and live
-delivery keep run-secret/current-user redaction. Complete tool outputs are parsed
-independently; only actual log streams retain partial-line tails. Optional receipt
-writes have three bounded attempts after source persistence and cannot reject
-ordinary run output or native settlement. These local UI hints add no permission
-and do not start provider resources.
-`GET /api/heartbeat-runs/:runId/events?view=plugin-panels` reads only these receipts
-under the normal run-read and telemetry-read authorization checks. The task page
-uses one history read on mount/reconnect and the existing live transcript stream,
-then makes a bounded plugin readiness check. No panel discovery timer scans runs
-or provider state while connected.
+`task.panel.activated` is a P1 Runner PRP event with a closed
+`{ pluginKey, slotId }` payload. Runner accepts a structured local notification
+only with the opaque context captured before the operation. Context changes with
+warm run authority and process recovery. Run identity comes from Runner's active
+authenticated binding; caller run IDs and retained environment run IDs are not
+accepted. The event itself is the durable activation record, deduplicated by the
+normal source-event protocol. No output text is scanned and no synthetic receipt
+is written. Local hints add no permissions or provider-resource startup.
+
+`GET /api/heartbeat-runs/:runId/events?view=plugin-panels` reads these events and
+returns only installed agent task-panel contributions under normal run-read and
+telemetry-read authorization. Ordinary PRP reads/live delivery retain run-secret
+and current-user redaction. The task page uses one history read on mount/reconnect
+and the existing live transcript stream, then makes a bounded plugin readiness
+check. No panel discovery timer scans runs or provider state while connected.

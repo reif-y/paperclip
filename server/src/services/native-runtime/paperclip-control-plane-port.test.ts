@@ -416,10 +416,9 @@ describe("PaperclipControlPlanePort conformance", () => {
     const event: PrpEvent = {
       schema: "paperclip.prp.event.v1", sourceEventId: `${runnerId}:1`, sourceSeq: 1,
       sourceInstanceId: runnerId, sourceKind: "runner", runId: identity.runId,
-      normalizedSessionId: identity.sessionId, eventType: "item.completed", schemaVersion: 1,
-      priority: 0, emittedAt: new Date().toISOString(),
-      payload: { kind: "dynamicToolCall", item: { type: "tool_result", id: "panel", tool_use_id: "panel",
-        result: { success: true, contentItems: [{ type: "inputText", text: "[paperclip-task-panel:example.live-view:screen]" }] } } },
+      normalizedSessionId: identity.sessionId, eventType: "task.panel.activated", schemaVersion: 1,
+      priority: 1, emittedAt: new Date().toISOString(),
+      payload: { pluginKey: "example.live-view", slotId: "screen" },
     };
     const port = new PaperclipControlPlanePort(db, binding);
     const replayBinding = structuredClone(binding);
@@ -430,12 +429,12 @@ describe("PaperclipControlPlanePort conformance", () => {
       if (event.type === "heartbeat.run.event" && event.payload.runId === identity.runId) notifications.push(String(event.payload.eventType));
     });
     try { await port.appendEvent(event); } finally { unsubscribe(); }
-    expect(notifications).toEqual(["item.completed", "plugin.task_panel"]);
+    expect(notifications).toEqual(["task.panel.activated"]);
     expect(await readTaskPanelActivations(db, identity.companyId, identity.runId)).toEqual([{ pluginKey: "example.live-view", slotId: "screen" }]);
     const restarted = new PaperclipControlPlanePort(db, replayBinding);
     expect((await restarted.appendEvent(event)).disposition).toBe("duplicate");
     const activations = await db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, identity.runId));
-    expect(activations.filter(row => row.eventType === "plugin.task_panel")).toHaveLength(1);
+    expect(activations.filter(row => row.eventType === "task.panel.activated")).toHaveLength(1);
     expect(await readTaskPanelActivations(db, identity.companyId, CONTROL_PLANE_CONFORMANCE_OPEN.identity.runId)).toEqual([]);
     expect(await readTaskPanelActivations(db, randomUUID(), identity.runId)).toEqual([]);
   });

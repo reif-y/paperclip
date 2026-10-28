@@ -48,8 +48,10 @@ export function useTaskPluginPanels(issue: Issue | null | undefined, enabled = t
   const stream = useTranscriptLiveStream(active ? [run!.id] : [], { companyId: issue?.companyId, enabled: active }, event => {
     if (!active || !run || event.companyId !== issue?.companyId || event.payload.runId !== run.id
       || event.payload.agentId !== run.agentId || event.payload.issueId !== issue?.id
-      || event.type !== "heartbeat.run.event" || event.payload.eventType !== "plugin.task_panel") return;
-    const panel = event.payload.payload as { pluginKey?: unknown; slotId?: unknown } | null;
+      || event.type !== "heartbeat.run.event" || event.payload.eventType !== "task.panel.activated") return;
+    const native = event.payload.payload as { prpEvent?: { eventType?: string; sourceKind?: string; payload?: unknown } } | null;
+    if (native?.prpEvent?.eventType !== "task.panel.activated" || native.prpEvent.sourceKind !== "runner") return;
+    const panel = native.prpEvent.payload as { pluginKey?: unknown; slotId?: unknown } | null;
     if (typeof panel?.pluginKey !== "string" || typeof panel.slotId !== "string") return;
     void queryClient.cancelQueries({ queryKey: activationKey }).then(() => queryClient.setQueryData<Array<{ pluginKey: string; slotId: string }>>(activationKey, previous => {
       if (previous?.some(item => item.pluginKey === panel.pluginKey && item.slotId === panel.slotId)) return previous;

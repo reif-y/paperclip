@@ -173,7 +173,8 @@
         "external_provider.dispatch_requested",
         "external_provider.operation_settled",
         "external_provider.input_available",
-        "auth.credentials.updated"
+        "auth.credentials.updated",
+        "task.panel.activated"
       ]
     },
     "schemaVersion": {
@@ -686,6 +687,47 @@
           },
           "payload": {
             "$ref": "https://paperclip.dev/schemas/prp/v1/auth-credentials.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "task.panel.activated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "sourceKind": {
+            "const": "runner"
+          },
+          "priority": {
+            "const": 1
+          },
+          "payload": {
+            "type": "object",
+            "required": [
+              "pluginKey",
+              "slotId"
+            ],
+            "properties": {
+              "pluginKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "slotId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              }
+            },
+            "additionalProperties": false
           }
         }
       }

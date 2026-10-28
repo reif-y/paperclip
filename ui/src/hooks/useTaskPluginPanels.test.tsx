@@ -104,8 +104,8 @@ it("uses each plugin's own availability path and excludes only the failing contr
 
 function event(overrides: Record<string, unknown> = {}): LiveEvent {
   return { id: 1, companyId: "company", type: "heartbeat.run.event", createdAt: "2099-01-01T00:00:00.000Z",
-    payload: { runId: "run", agentId: "agent", issueId: "task", eventType: "plugin.task_panel",
-      payload: { pluginKey: slot.pluginKey, slotId: slot.id }, ...overrides } } as LiveEvent;
+    payload: { runId: "run", agentId: "agent", issueId: "task", eventType: "task.panel.activated",
+      payload: { prpEvent: { eventType: "task.panel.activated", sourceKind: "runner", payload: { pluginKey: slot.pluginKey, slotId: slot.id } } }, ...overrides } } as LiveEvent;
 }
 async function emit(value: LiveEvent) {
   await act(async () => { plugin.handler?.(value); });
@@ -119,6 +119,10 @@ it("does no availability polling or Launcher discovery until this run activates 
   for (const overrides of [{ runId: "other" }, { agentId: "other" }, { issueId: "other" }, { eventType: "item.completed" }]) await emit(event(overrides));
   await emit({ ...event(), companyId: "other" });
   await emit(event({ payload: { pluginKey: "example.other", slotId: "screen" } }));
+  for (const native of [
+    { eventType: "task.panel.activated", sourceKind: "control_plane", payload: { pluginKey: slot.pluginKey, slotId: slot.id } },
+    { eventType: "task.panel.activated", sourceKind: "runner", payload: { pluginKey: "example.other", slotId: slot.id } },
+  ]) await emit(event({ payload: { prpEvent: native } }));
   expect(get).not.toHaveBeenCalled();
   await emit(event());
   expect(get).toHaveBeenCalledTimes(1); expect(current[0]?.runId).toBe("run");
