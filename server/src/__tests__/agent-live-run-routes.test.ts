@@ -704,6 +704,7 @@ describe("agent live run routes", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ pluginKey: "example.live-view", slotId: "screen" }]);
     expect(limit).toHaveBeenCalledWith(128);
+    expect(mockRunSecretRedactionRegistry.redactForRun).toHaveBeenCalledWith("company-1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", [{ pluginKey: "example.live-view", slotId: "screen" }]);
     mockHeartbeatService.getRunReadAccess.mockResolvedValue(null);
     const denied = await requestApp(await createApp(db), url => request(url).get(
       "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events?view=plugin-panels"));
