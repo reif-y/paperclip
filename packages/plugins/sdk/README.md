@@ -273,7 +273,10 @@ its view first becomes useful (percent-encode both identifiers):
 
 Emit it after successful use, not during help, schema discovery or status probes.
 The host records a `plugin.task_panel` run-log event under the authenticated output
-owner. The signal supplies no run identity or authority. It is a UI hint; normal
+owner. Only identifiers that match an installed, ready agent task-panel slot can
+be recorded. Arbitrary marker text is rejected, and activation reads/live delivery
+retain run-secret and current-user redaction. The signal supplies no run identity
+or authority. It is a UI hint; normal
 plugin discovery, authorization and availability checks still apply. Quoted source
 and ordinary prose do not match the standalone-line protocol.
 
@@ -284,7 +287,9 @@ attempts per activation/recovery, then stops. There is no periodic panel readine
 poll. A first use that happened before the task page opened is restored from the
 saved run event. A later run must produce its own activation, even when a provider
 process or an agent's view stays warm. Only the matching task and running agent
-can contribute a panel.
+can contribute a panel. Optional receipt writes have three bounded attempts and
+never reject ordinary source log/event writes or native settlement. A later use or
+source replay can retry a failed receipt without an idle timer.
 
 The plugin owns availability, labels, content and controls. No private plugin
 identifier or provider protocol belongs in Core. Missing/disabled plugins, failed

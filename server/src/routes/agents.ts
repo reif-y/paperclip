@@ -7602,7 +7602,9 @@ export function agentRoutes(
     if (!(await assertRunReadAllowed(req, res, run))) return;
 
     if (req.query.view === "plugin-panels") {
-      res.json(await readTaskPanelActivations(db, run.companyId, run.id));
+      const options = await getCurrentUserRedactionOptions();
+      const panels = redactCurrentUserValue(await readTaskPanelActivations(db, run.companyId, run.id), options);
+      res.json(await runRedactions.redactForRun(run.companyId, run.id, panels.map(panel => redactEventPayload({ ...panel }))));
       return;
     }
 

@@ -640,7 +640,12 @@ standalone `[paperclip-task-panel:PLUGIN_KEY:SLOT_ID]` output line. Both identif
 are percent-encoded on the wire. The host supplies company, agent, task and current
 run identity; a warm process cannot attribute the hint using an old environment
 run ID. Replayed source events produce one activation per run/contribution.
-These local UI hints add no permission and do not start provider resources.
+Only installed, ready agent task-panel identifiers are accepted. Reads and live
+delivery keep run-secret/current-user redaction. Complete tool outputs are parsed
+independently; only actual log streams retain partial-line tails. Optional receipt
+writes have three bounded attempts after source persistence and cannot reject
+ordinary run output or native settlement. These local UI hints add no permission
+and do not start provider resources.
 `GET /api/heartbeat-runs/:runId/events?view=plugin-panels` reads only these receipts
 under the normal run-read and telemetry-read authorization checks. The task page
 uses one history read on mount/reconnect and the existing live transcript stream,

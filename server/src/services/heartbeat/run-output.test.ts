@@ -1,3 +1,4 @@
+import * as taskPanels from "../plugin-task-panels.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,6 +58,7 @@ const newRunRow = {
 } as Partial<Run>;
 
 async function beginAttempt(store: ReturnType<typeof createDurableRunLogStore>, row: Partial<Run>) {
+  const savedEvent = vi.fn();
   const output = createHeartbeatRunOutput(createRunRowDb(row), {
     run: row as Run,
     runId: row.id!,
@@ -64,11 +66,11 @@ async function beginAttempt(store: ReturnType<typeof createDurableRunLogStore>, 
     runLogStore: store,
     identityRedactor: { chunk: (_stream, chunk) => chunk, redact: (value) => value },
     secretKeys: new Set(),
-    appendRunEvent: vi.fn(),
+    appendRunEvent: savedEvent,
     getCurrentUserRedactionOptions: async () => ({ enabled: false }),
   });
-  const { onLog } = await output.begin({ ...row } as Run);
-  return { output, onLog };
+  const { onLog, onAdapterEvent } = await output.begin({ ...row } as Run);
+  return { output, onLog, onAdapterEvent, savedEvent };
 }
 
 let baseDir: string;
@@ -80,6 +82,23 @@ afterEach(async () => {
 });
 
 describe("heartbeat run output log recovery", () => {
+  it("saves log and adapter output even when optional panel persistence is unavailable", async () => {
+    const record = vi.spyOn(taskPanels, "recordTaskPanelActivation").mockRejectedValue(new Error("panel database unavailable"));
+    try {
+      const { provider, objects } = createMemoryProvider();
+      const store = createDurableRunLogStore({ basePath: baseDir, s3: { provider } });
+      const row = { ...newRunRow };
+      const attempt = await beginAttempt(store, row);
+      const marker = "\n[paperclip-task-panel:example.live-view:screen]\n";
+      await expect(attempt.onLog("stderr", marker)).resolves.toBeUndefined();
+      await expect(attempt.onAdapterEvent({ eventType: "tool_result", stream: "stdout", payload: { output: marker } })).resolves.toBeUndefined();
+      expect(attempt.savedEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: "tool_result", payload: { output: marker } }));
+      expect(record).toHaveBeenCalledTimes(6);
+      await store.finalize(attempt.output.handle!);
+      expect(objects.get(row.logRef!)!.toString()).toContain("paperclip-task-panel");
+    } finally { record.mockRestore(); }
+  });
+
   it("treats only a run row with no recorded log or output as new", () => {
     expect(isNewRunLog({ logStore: null, logRef: null, logBytes: null, lastOutputSeq: 0 })).toBe(true);
     expect(isNewRunLog({ logStore: "local_file", logRef: "c/a/r.ndjson", logBytes: null, lastOutputSeq: 0 })).toBe(false);

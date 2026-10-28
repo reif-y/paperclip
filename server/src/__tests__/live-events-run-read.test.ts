@@ -1,3 +1,6 @@
+import { observeTaskPanelActivations, readTaskPanelActivations, recordTaskPanelActivation } from "../services/plugin-task-panels.js";
+import { plugins } from "@paperclipai/db";
+import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { redactEventPayload } from "../redaction.js";
@@ -41,6 +44,34 @@ describe("live-event run read boundaries", () => {
     if (previousMasterKey === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY;
     else process.env.PAPERCLIP_SECRETS_MASTER_KEY = previousMasterKey;
     await temporary?.cleanup();
+  });
+
+  it("rejects percent-encoded registered secrets as panel identifiers before storage or broadcast", async () => {
+    const companyId = randomUUID();
+    await db.insert(companies).values({ id: companyId, name: "Panel secret test", issuePrefix: "PNLSEC" });
+    const [agent] = await db.insert(agents).values({ companyId, name: "Panel fixture", adapterType: "process" }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({ companyId, agentId: agent.id, status: "running" }).returning();
+    const pluginKey = "example.secure-view";
+    await db.insert(plugins).values({ pluginKey, packageName: pluginKey, version: "1.0.0", status: "ready",
+      manifestJson: { ui: { slots: [{ type: "detailTab", id: "screen", entityTypes: ["agent"], taskSidePanel: { availabilityPath: "/agents/:entityId/ready" } }] } } as never });
+    const secret = "registered-panel-secret-fixture";
+    await createRunSecretRedactionRegistry(db).register(companyId, run.id, secret);
+    const seen: unknown[] = [];
+    const unsubscribe = subscribeCompanyLiveEvents(companyId, event => { seen.push(event); });
+    const observe = observeTaskPanelActivations(panel => recordTaskPanelActivation(db, { companyId, runId: run.id, agentId: agent.id, issueId: null }, panel));
+    const encoded = [...secret].map(char => `%${char.charCodeAt(0).toString(16)}`).join("");
+    try {
+      await observe("stderr", `[paperclip-task-panel:${encoded}:screen]`);
+      await observe("stderr", `\n[paperclip-task-panel:${pluginKey}:${encoded}]`);
+      expect(seen).toEqual([]);
+      expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([]);
+      await observe("stderr", `\n[paperclip-task-panel:${pluginKey}:screen]`);
+      const response = await readTaskPanelActivations(db, companyId, run.id);
+      expect(response).toEqual([{ pluginKey, slotId: "screen" }]);
+      expect(JSON.stringify(response)).not.toContain(secret);
+      expect(JSON.stringify(seen)).not.toContain(secret);
+      expect(seen).toHaveLength(1);
+    } finally { unsubscribe(); }
   });
 
   it("reads only run bindings and reauthorizes every delivery after revocation or deletion", async () => {

@@ -108,7 +108,6 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
     const currentUserRedactionOptions =
       await getCurrentUserRedactionOptions();
     const appendIdentityRedactedLog = async (stream: "stdout" | "stderr", chunk: string) => {
-      await observePanels(stream, chunk);
       const sanitizedChunk = compactRunLogChunk(
         redactCurrentUserText(chunk, currentUserRedactionOptions),
       );
@@ -184,6 +183,7 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
           truncated: payloadChunk.length !== sanitizedChunk.length,
         },
       });
+      await observePanels(stream, chunk);
     };
     const onLog = (stream: "stdout" | "stderr", chunk: string) =>
       appendIdentityRedactedLog(stream, identityRedactor.chunk(stream, chunk));
@@ -205,7 +205,6 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
 
     const onAdapterEvent = async (event: AdapterRuntimeEvent) => {
       event = identityRedactor.redact(event);
-      await observePanels("event", event.payload);
       const eventType = event.eventType.trim();
       // This namespace attests host-owned handoff cleanup. Legacy adapters do
       // not carry nativeSource identities, so they must never author it.
@@ -218,6 +217,7 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
         message: event.message,
         payload: event.payload,
       });
+      await observePanels("event", event.payload);
     };
 
     return { currentUserRedactionOptions, appendIdentityRedactedLog, onLog, onAdapterMeta, onAdapterEvent };

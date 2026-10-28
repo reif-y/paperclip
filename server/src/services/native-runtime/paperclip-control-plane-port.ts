@@ -306,17 +306,15 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
         });
       } catch {
       }
-      await this.#observePanels("event", event.payload);
-      this.#assertActive(options);
       await this.#onCommittedEvent?.(event);
+      await this.#observePanels("event", event.payload);
     } else {
       // A recovered runner may replay the event whose durable side effects
       // parked the prior attempt. Do not repeat those effects, but let the
       // embedding runtime refresh observational state before appendEvent
       // returns to its synchronous governed-wait boundary.
-      await this.#observePanels("event", event.payload);
-      this.#assertActive(options);
       await this.#onDuplicateEvent?.(event);
+      await this.#observePanels("event", event.payload);
     }
     return {
       cursor: persisted.row.seq,

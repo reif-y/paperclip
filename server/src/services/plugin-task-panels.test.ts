@@ -19,8 +19,19 @@ describe("task panel activation hints", () => {
   it("retries failed persistence instead of acknowledging an unsaved activation", async () => {
     const save = vi.fn().mockRejectedValueOnce(new Error("unavailable")).mockResolvedValue(undefined);
     const observe = observeTaskPanelActivations(save);
-    await expect(observe("stderr", marker)).rejects.toThrow("unavailable");
+    await expect(observe("stderr", marker)).resolves.toBeUndefined();
     await observe("stderr", marker); expect(save).toHaveBeenCalledTimes(2);
+  });
+  it("keeps complete tool results separate even when the previous output has no newline", async () => {
+    const save = vi.fn(async () => {}), observe = observeTaskPanelActivations(save);
+    await observe("event", { output: "ready" });
+    await observe("event", { output: marker });
+    expect(save).toHaveBeenCalledExactlyOnceWith({ pluginKey: "example.live-view", slotId: "screen" });
+  });
+  it("bounds persistence retries without rejecting source output", async () => {
+    const save = vi.fn().mockRejectedValue(new Error("unavailable")), observe = observeTaskPanelActivations(save);
+    await expect(observe("stderr", marker)).resolves.toBeUndefined(); expect(save).toHaveBeenCalledTimes(3);
+    await observe("stderr", `\n${marker}`); expect(save).toHaveBeenCalledTimes(6);
   });
   it("does not infer activation from ordinary commands or prose", async () => {
     const save = vi.fn(async () => {}), observe = observeTaskPanelActivations(save);

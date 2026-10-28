@@ -1,5 +1,6 @@
+import { logger } from "../middleware/logger.js";
 import { and, eq, sql } from "drizzle-orm";
-import { heartbeatRunEvents, type Db } from "@paperclipai/db";
+import { heartbeatRunEvents, plugins, type Db } from "@paperclipai/db";
 
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 import { publishLiveEvent } from "./live-events.js";
@@ -12,18 +13,18 @@ export interface TaskPanelActivation { pluginKey: string; slotId: string }
 export function observeTaskPanelActivations(activate: (panel: TaskPanelActivation) => Promise<void>) {
   const seen = new Set<string>();
   const tails = new Map<string, string>();
-  const observe = async (channel: string, chunk: unknown, depth = 0): Promise<void> => {
+  const observe = async (channel: string, chunk: unknown, depth = 0, streaming = typeof chunk === "string"): Promise<void> => {
     if (depth > 12) return;
     if (chunk && typeof chunk === "object") {
-      for (const [key, value] of Object.entries(chunk)) await observe(`${channel}.${key}`, value, depth + 1);
+      for (const [key, value] of Object.entries(chunk)) await observe(`${channel}.${key}`, value, depth + 1, false);
       return;
     }
     if (typeof chunk !== "string") return;
-    const previous = tails.get(channel) ?? "";
+    const previous = streaming ? tails.get(channel) ?? "" : "";
     const text = previous + chunk;
     let consumed = 0;
-    if (!tails.has(channel) && tails.size >= 128) tails.delete(tails.keys().next().value!);
-    tails.set(channel, text.slice(-1024));
+    if (streaming && !tails.has(channel) && tails.size >= 128) tails.delete(tails.keys().next().value!);
+    if (streaming) tails.set(channel, text.slice(-1024));
     for (const match of text.matchAll(/(?:^|\n)\[paperclip-task-panel:([a-zA-Z0-9_.%~!-]{1,384}):([a-zA-Z0-9_.%~!-]{1,384})\](?=\r?\n|$)/g)) {
       consumed = match.index! + match[0].length;
       let panel: TaskPanelActivation;
@@ -32,10 +33,16 @@ export function observeTaskPanelActivations(activate: (panel: TaskPanelActivatio
       const key = JSON.stringify(panel);
       if (seen.has(key) || seen.size >= 128) continue;
       seen.add(key);
-      try { await activate(panel); }
-      catch (error) { seen.delete(key); tails.set(channel, previous); throw error; }
+      let saved = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { await activate(panel); saved = true; break; } catch { /* Optional UI hints cannot fail execution. */ }
+      }
+      if (!saved) {
+        seen.delete(key);
+        logger.warn("Task panel activation could not be recorded after three attempts");
+      }
     }
-    if (consumed) tails.set(channel, text.slice(consumed).slice(-1024));
+    if (streaming && consumed) tails.set(channel, text.slice(consumed).slice(-1024));
   };
   return observe;
 }
@@ -52,6 +59,10 @@ export async function readTaskPanelActivations(db: Db, companyId: string, runId:
 export async function recordTaskPanelActivation(db: Db, binding: {
   companyId: string; runId: string; agentId: string; issueId: string | null;
 }, panel: TaskPanelActivation) {
+  const [installed] = await db.select({ manifest: plugins.manifestJson }).from(plugins)
+    .where(and(eq(plugins.pluginKey, panel.pluginKey), eq(plugins.status, "ready"))).limit(1);
+  if (!installed?.manifest.ui?.slots?.some(slot => slot.id === panel.slotId && slot.type === "detailTab"
+    && slot.entityTypes?.includes("agent") && slot.taskSidePanel)) return;
   const row = await db.transaction(async tx => {
     const [run] = await tx.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
       eq(heartbeatRuns.id, binding.runId), eq(heartbeatRuns.companyId, binding.companyId), eq(heartbeatRuns.agentId, binding.agentId),
