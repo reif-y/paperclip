@@ -45,9 +45,8 @@ export function isNewRunLog(
 /** One recorder per execution attempt; the log store itself stays service-scoped. */
 export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput) {
   const { run, runId, issueId, runLogStore, identityRedactor, secretKeys, appendRunEvent, getCurrentUserRedactionOptions } = input;
-  const observePanels = observeTaskPanelActivations(async panel => {
-    await recordTaskPanelActivation(db, { companyId: run.companyId, agentId: run.agentId, runId: run.id, issueId }, panel);
-  });
+  const observePanels = observeTaskPanelActivations(panel =>
+    recordTaskPanelActivation(db, { companyId: run.companyId, agentId: run.agentId, runId: run.id, issueId }, panel));
   let handle: RunLogHandle | null = null;
   let stdoutExcerpt = "";
   let stderrExcerpt = "";

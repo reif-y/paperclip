@@ -46,6 +46,23 @@ describe("live-event run read boundaries", () => {
     await temporary?.cleanup();
   });
 
+  it.each(["disabled", "error", "upgrade_pending"] as const)("activates a recovered %s plugin on later use in the same run", async status => {
+    const companyId = randomUUID(), pluginKey = `example.recovered-${status}`;
+    await db.insert(companies).values({ id: companyId, name: "Panel recovery", issuePrefix: `PNL${status.toUpperCase()}` });
+    const [agent] = await db.insert(agents).values({ companyId, name: "Panel fixture", adapterType: "process" }).returning();
+    const [run] = await db.insert(heartbeatRuns).values({ companyId, agentId: agent.id, status: "running" }).returning();
+    await db.insert(plugins).values({ pluginKey, packageName: pluginKey, version: "1.0.0", status,
+      manifestJson: { ui: { slots: [{ type: "detailTab", id: "screen", entityTypes: ["agent"], taskSidePanel: { availabilityPath: "/agents/:entityId/ready" } }] } } as never });
+    const observe = observeTaskPanelActivations(panel => recordTaskPanelActivation(db, { companyId, runId: run.id, agentId: agent.id, issueId: null }, panel));
+    const output = { output: `[paperclip-task-panel:${pluginKey}:screen]` };
+    await observe("event", output);
+    expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([]);
+    await db.update(plugins).set({ status: "ready" }).where(eq(plugins.pluginKey, pluginKey));
+    await observe("event", output);
+    await observe("event", output);
+    expect(await readTaskPanelActivations(db, companyId, run.id)).toEqual([{ pluginKey, slotId: "screen" }]);
+  });
+
   it("rejects percent-encoded registered secrets as panel identifiers before storage or broadcast", async () => {
     const companyId = randomUUID();
     await db.insert(companies).values({ id: companyId, name: "Panel secret test", issuePrefix: "PNLSEC" });
