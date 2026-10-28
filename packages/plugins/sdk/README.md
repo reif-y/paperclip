@@ -262,14 +262,35 @@ An additional tab on a project, issue, agent, goal, or run detail page. Rendered
 Agent detail tabs can also appear in task side panels. Add
 `taskSidePanel: { availabilityPath: "/agents/:entityId/view/availability" }` to the
 slot and declare that exact path as a board-only GET API route with
-`companyResolution: { from: "agent", param: "entityId" }`. The route returns
-`{ available: true }` only while its view is in use. The host replaces `:entityId`
-with the task's running agent ID, polls availability and mounts the same component
-with agent context. The plugin owns availability, labels, content and controls.
-No private plugin identifier or provider protocol belongs in Core. Unavailable
-views, access failures, inactive runs and missing plugins contribute no task tab.
-Closing a tab preserves dismissal during polling; available panels remain in the
-launcher. Only tab identity is persisted, never availability responses or secrets.
+`companyResolution: { from: "agent", param: "entityId" }`.
+
+The plugin's runtime automatically emits this exact standalone output line when
+its view first becomes useful (percent-encode both identifiers):
+
+```text
+[paperclip-task-panel:example.live-view:screen]
+```
+
+Emit it after successful use, not during help, schema discovery or status probes.
+The host records a `plugin.task_panel` run-log event under the authenticated output
+owner. The signal supplies no run identity or authority. It is a UI hint; normal
+plugin discovery, authorization and availability checks still apply. Quoted source
+and ordinary prose do not match the standalone-line protocol.
+
+The host reads durable activations on mount and reconnect. For activated views it
+replaces `:entityId` with the running agent ID, adds `runId` and `issueId` query
+parameters, and checks for `{ available: true }`. It makes at most three readiness
+attempts per activation/recovery, then stops. There is no periodic panel readiness
+poll. A first use that happened before the task page opened is restored from the
+saved run event. A later run must produce its own activation, even when a provider
+process or an agent's view stays warm. Only the matching task and running agent
+can contribute a panel.
+
+The plugin owns availability, labels, content and controls. No private plugin
+identifier or provider protocol belongs in Core. Missing/disabled plugins, failed
+history reads, unavailable views and access failures add no task tab. Dismissal
+still applies for the current run. Only tab identity is stored in browser state;
+activation receipts remain in the authorized instance run log.
 
 #### `taskDetailView`
 

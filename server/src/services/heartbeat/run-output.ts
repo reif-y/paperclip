@@ -1,3 +1,4 @@
+import { observeTaskPanelActivations, recordTaskPanelActivation } from "../plugin-task-panels.js";
 import { eq } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@paperclipai/db";
 import type { AdapterInvocationMeta, AdapterRuntimeEvent } from "../../adapters/index.js";
@@ -44,6 +45,9 @@ export function isNewRunLog(
 /** One recorder per execution attempt; the log store itself stays service-scoped. */
 export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput) {
   const { run, runId, issueId, runLogStore, identityRedactor, secretKeys, appendRunEvent, getCurrentUserRedactionOptions } = input;
+  const observePanels = observeTaskPanelActivations(async panel => {
+    await recordTaskPanelActivation(db, { companyId: run.companyId, agentId: run.agentId, runId: run.id, issueId }, panel);
+  });
   let handle: RunLogHandle | null = null;
   let stdoutExcerpt = "";
   let stderrExcerpt = "";
@@ -104,6 +108,7 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
     const currentUserRedactionOptions =
       await getCurrentUserRedactionOptions();
     const appendIdentityRedactedLog = async (stream: "stdout" | "stderr", chunk: string) => {
+      await observePanels(stream, chunk);
       const sanitizedChunk = compactRunLogChunk(
         redactCurrentUserText(chunk, currentUserRedactionOptions),
       );
@@ -200,6 +205,7 @@ export function createHeartbeatRunOutput(db: Db, input: HeartbeatRunOutputInput)
 
     const onAdapterEvent = async (event: AdapterRuntimeEvent) => {
       event = identityRedactor.redact(event);
+      await observePanels("event", event.payload);
       const eventType = event.eventType.trim();
       // This namespace attests host-owned handoff cleanup. Legacy adapters do
       // not carry nativeSource identities, so they must never author it.

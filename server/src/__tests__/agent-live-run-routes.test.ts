@@ -674,6 +674,7 @@ describe("agent live run routes", () => {
         "/api/companies/company-1/live-runs",
         "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events",
+        "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events?view=plugin-panels",
         "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/log",
         "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/workspace-operations",
         "/api/workspace-operations/operation-1/log",
@@ -693,6 +694,21 @@ describe("agent live run routes", () => {
       }));
     },
   );
+
+  it("reads persisted plugin activation only after normal run-read authorization", async () => {
+    const limit = vi.fn(async () => [{ payload: { pluginKey: "example.live-view", slotId: "screen" } }]);
+    const query = { from: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit };
+    const db = { selectDistinct: vi.fn(() => query) };
+    const response = await requestApp(await createApp(db), url => request(url).get(
+      "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events?view=plugin-panels"));
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ pluginKey: "example.live-view", slotId: "screen" }]);
+    expect(limit).toHaveBeenCalledWith(128);
+    mockHeartbeatService.getRunReadAccess.mockResolvedValue(null);
+    const denied = await requestApp(await createApp(db), url => request(url).get(
+      "/api/heartbeat-runs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/events?view=plugin-panels"));
+    expect(denied.status).toBe(404); expect(limit).toHaveBeenCalledTimes(1);
+  });
 
   it("lists workspace operations using narrow current run access", async () => {
     mockHeartbeatService.getRunWorkspaceAccess.mockResolvedValue({

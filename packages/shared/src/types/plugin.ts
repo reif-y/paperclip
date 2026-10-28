@@ -500,7 +500,9 @@ export interface PluginUiSlotDeclaration {
    */
   entityTypes?: PluginUiSlotEntityType[];
   /** Also offer this agent detail tab beside a task while its agent is running.
-   * GET this plugin-relative path with :entityId replaced by the agent ID.
+   * The run must emit a generic task-panel activation signal first.
+   * GET this plugin-relative path with :entityId replaced by the agent ID,
+   * and runId/issueId query parameters for the active task.
    * The board/agent-scoped route returns { available: boolean }.
    */
   taskSidePanel?: { availabilityPath: string };

@@ -632,3 +632,17 @@ write the warning must not replace the provider outcome or stop lease release.
 cannot apply company export settings. Its payload contains only a closed reason
 and the settings revision. It carries no endpoint, credential, secret reference
 or resolver error. Recording the diagnostic never contacts a destination.
+
+## Task plugin panel activation
+
+`plugin.task_panel` records `{ pluginKey, slotId }` when a runtime emits an exact
+standalone `[paperclip-task-panel:PLUGIN_KEY:SLOT_ID]` output line. Both identifiers
+are percent-encoded on the wire. The host supplies company, agent, task and current
+run identity; a warm process cannot attribute the hint using an old environment
+run ID. Replayed source events produce one activation per run/contribution.
+These local UI hints add no permission and do not start provider resources.
+`GET /api/heartbeat-runs/:runId/events?view=plugin-panels` reads only these receipts
+under the normal run-read and telemetry-read authorization checks. The task page
+uses one history read on mount/reconnect and the existing live transcript stream,
+then makes a bounded plugin readiness check. No panel discovery timer scans runs
+or provider state while connected.

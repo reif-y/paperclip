@@ -1,3 +1,4 @@
+import { observeTaskPanelActivations, recordTaskPanelActivation } from "../plugin-task-panels.js";
 import { createAgentIdentityRedactor } from "../agent-identity-redaction.js";
 import { and, asc, eq, gt, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -84,6 +85,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
   #sessionId: string | null = null;
   readonly #assertControllerActive?: () => void;
   readonly #assertRunAdmissionActive?: () => void;
+  readonly #observePanels: ReturnType<typeof observeTaskPanelActivations>;
   readonly #onCommittedEvent?: (event: PrpEvent) => Promise<void>;
   readonly #onDuplicateEvent?: (event: PrpEvent) => Promise<void>;
 
@@ -102,6 +104,7 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
     } = {},
   ) {
     this.#db = db;
+    this.#observePanels = observeTaskPanelActivations(panel => recordTaskPanelActivation(this.#db, this.#binding, panel));
     this.#assertControllerActive = options.assertControllerActive;
     this.#assertRunAdmissionActive = options.assertRunAdmissionActive ?? options.assertControllerActive;
     this.#identityRedactor = createAgentIdentityRedactor(options.privateKeyPem);
@@ -303,12 +306,16 @@ export class PaperclipControlPlanePort implements ControlPlanePort {
         });
       } catch {
       }
+      await this.#observePanels("event", event.payload);
+      this.#assertActive(options);
       await this.#onCommittedEvent?.(event);
     } else {
       // A recovered runner may replay the event whose durable side effects
       // parked the prior attempt. Do not repeat those effects, but let the
       // embedding runtime refresh observational state before appendEvent
       // returns to its synchronous governed-wait boundary.
+      await this.#observePanels("event", event.payload);
+      this.#assertActive(options);
       await this.#onDuplicateEvent?.(event);
     }
     return {
