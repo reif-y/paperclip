@@ -655,6 +655,9 @@ describe("native backend factory", () => {
   });
 
   it.each([
+    ["pi", "../../test-fixtures/pi-acp/profile-v30-identity.json"],
+    ["copilot", "../../test/fixtures/copilot-profile-v71-identity.json"],
+    ["grok", "../../test/fixtures/grok-profile-v7-identity.json"],
     ["cursor", "../../test/fixtures/cursor-acp/profile-v7-identity.json"],
     ["cursor", "../../test/fixtures/cursor-acp/profile-v10-identity.json"],
     ["copilot", "../../test/fixtures/copilot-profile-v14-identity.json"],

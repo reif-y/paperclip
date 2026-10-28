@@ -5,6 +5,7 @@
   "prpEventFamilyDescriptions": {
     "runner": "Runner connection, drain, and diagnostic lifecycle.",
     "runtime": "Runner phase transitions.",
+    "task": "Run-bound plugin task-panel activation.",
     "sandbox": "Sandbox resource measurements.",
     "workspace": "Workspace readiness.",
     "harness": "Provider harness startup, readiness, exit, and diagnostics.",
