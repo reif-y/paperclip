@@ -149,6 +149,26 @@ it("does not lose an activation to an older in-flight history read", async () =>
   await act(async () => { resolve([]); await vi.advanceTimersByTimeAsync(30); });
   expect(current).toHaveLength(1);
 });
+it("merges earlier panel history with a different panel activated during the read", async () => {
+  vi.useFakeTimers();
+  const second = { ...slot, id: "second-screen" };
+  plugin.slots = [slot, second];
+  let resolve!: (value: Array<{ pluginKey: string; slotId: string }>) => void;
+  history.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  await render();
+  expect(get).not.toHaveBeenCalled();
+  await emit(event({ payload: { prpEvent: {
+    eventType: "task.panel.activated", sourceKind: "runner",
+    payload: { pluginKey: second.pluginKey, slotId: second.id },
+  } } }));
+  expect(current.map(panel => panel.slot.id)).toEqual([second.id]);
+  await act(async () => {
+    resolve([{ pluginKey: slot.pluginKey, slotId: slot.id }]);
+    await vi.advanceTimersByTimeAsync(30);
+  });
+  expect(current.map(panel => panel.slot.id)).toEqual([slot.id, second.id]);
+  expect(history).toHaveBeenCalledTimes(1);
+});
 it("fails closed when activation history cannot be read", async () => {
   history.mockRejectedValue(new Error("Access denied")); await render();
   expect(get).not.toHaveBeenCalled(); expect(current).toEqual([]);

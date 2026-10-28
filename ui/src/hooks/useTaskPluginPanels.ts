@@ -42,6 +42,13 @@ export function useTaskPluginPanels(issue: Issue | null | undefined, enabled = t
   const { data: activations = [], isError: activationsError } = useQuery({
     queryKey: activationKey,
     queryFn: ({ signal }) => heartbeatsApi.taskPanelActivations(run!.id, { signal, cache: "no-store" }),
+    // Run activations only grow; merge history and live hints when committing cache data.
+    structuralSharing: (previous, incoming) => {
+      const next = incoming as Array<{ pluginKey: string; slotId: string }>;
+      const missing = ((previous ?? []) as typeof next).filter(panel =>
+        !next.some(item => item.pluginKey === panel.pluginKey && item.slotId === panel.slotId));
+      return missing.length ? [...next, ...missing] : next;
+    },
     enabled: active,
     retry: false,
   });
@@ -53,10 +60,10 @@ export function useTaskPluginPanels(issue: Issue | null | undefined, enabled = t
     if (native?.prpEvent?.eventType !== "task.panel.activated" || native.prpEvent.sourceKind !== "runner") return;
     const panel = native.prpEvent.payload as { pluginKey?: unknown; slotId?: unknown } | null;
     if (typeof panel?.pluginKey !== "string" || typeof panel.slotId !== "string") return;
-    void queryClient.cancelQueries({ queryKey: activationKey }).then(() => queryClient.setQueryData<Array<{ pluginKey: string; slotId: string }>>(activationKey, previous => {
+    queryClient.setQueryData<Array<{ pluginKey: string; slotId: string }>>(activationKey, previous => {
       if (previous?.some(item => item.pluginKey === panel.pluginKey && item.slotId === panel.slotId)) return previous;
       return [...(previous ?? []), { pluginKey: panel.pluginKey as string, slotId: panel.slotId as string }];
-    }));
+    });
   });
   const previousStream = useRef(stream);
   useEffect(() => {
