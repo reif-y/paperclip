@@ -286,7 +286,9 @@ local notification endpoint descriptor. The helper uses bounded JSON-RPC over a
 private filesystem mailbox (2 KiB frames, at most 16 entries per control-loop
 iteration and a 500 ms client deadline). Per-request directories are private,
 atomically published and cleaned on completion or timeout; abandoned requests
-expire after two seconds. It does not parse stdout/stderr or take a run ID. Runner
+expire after two seconds. Runner opens request directories without following
+symlinks and performs reads, claims, replies and expiry cleanup relative to
+those open handles, so a provider cannot redirect them by swapping a pathname. It does not parse stdout/stderr or take a run ID. Runner
 rejects contexts from earlier warm attachments or process lifetimes and persists
 `task.panel.activated` with `{ pluginKey, slotId }` through its existing
 authenticated PRP event stream before acknowledging. The wrapper treats this

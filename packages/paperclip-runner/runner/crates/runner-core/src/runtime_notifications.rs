@@ -1,7 +1,8 @@
 //! Local UI hints share Runner's durable, authenticated event transport.
 use std::collections::HashSet;
 use std::fs::{self, DirBuilder};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -11,8 +12,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::durable::{
-    create_private_temporary_file, verify_private_directory, DurableRunnerConfig,
-    DurableRunnerError, DurableState, DurableStateStore, EventPriority,
+    verify_private_directory, DurableRunnerConfig, DurableRunnerError, DurableState,
+    DurableStateStore, EventPriority,
 };
 
 pub const CONTEXT_ENV: &str = "PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT";
@@ -25,13 +26,40 @@ pub fn context_path(state_dir: &Path) -> PathBuf {
 
 struct MailboxDirectory {
     directory: PathBuf,
+    handle: fs::File,
+}
+
+fn open_directory_at(
+    parent: impl AsFd,
+    path: impl rustix::path::Arg,
+) -> Result<fs::File, DurableRunnerError> {
+    let file = fs::File::from(
+        rustix::fs::openat(
+            parent,
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(failure)?,
+    );
+    if file.metadata().map_err(failure)?.permissions().mode() & 0o077 != 0 {
+        return Err(failure("notification directory must be private"));
+    }
+    Ok(file)
 }
 
 impl MailboxDirectory {
-    fn create(parent: &Path) -> io::Result<Self> {
+    fn create(parent: &Path) -> Result<Self, DurableRunnerError> {
         let directory = parent.join(format!("prn-{}", Uuid::new_v4().simple()));
-        DirBuilder::new().mode(0o700).create(&directory)?;
-        Ok(Self { directory })
+        DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .map_err(failure)?;
+        let handle = open_directory_at(rustix::fs::CWD, &directory)?;
+        Ok(Self { directory, handle })
     }
 }
 
@@ -42,18 +70,64 @@ impl Drop for MailboxDirectory {
 }
 
 fn write_frame(path: &Path, frame: &Value) -> Result<(), DurableRunnerError> {
+    let parent = open_directory_at(
+        rustix::fs::CWD,
+        path.parent()
+            .ok_or_else(|| failure("missing frame parent"))?,
+    )?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| failure("invalid frame name"))?;
+    write_frame_at(&parent, name, frame)
+}
+
+fn write_frame_at(
+    directory: &fs::File,
+    name: &str,
+    frame: &Value,
+) -> Result<(), DurableRunnerError> {
     let bytes = serde_json::to_vec(frame).map_err(failure)?;
     if bytes.len() > MAX_FRAME {
         return Err(failure("oversized notification"));
     }
-    let (temporary, mut file) = create_private_temporary_file(path)?;
-    let result = file
-        .write_all(&bytes)
-        .and_then(|_| fs::rename(&temporary, path));
+    let temporary = format!(".{}.tmp", Uuid::new_v4().simple());
+    let mut file = fs::File::from(
+        rustix::fs::openat(
+            directory,
+            temporary.as_str(),
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .map_err(failure)?,
+    );
+    let result = file.write_all(&bytes).map_err(failure).and_then(|_| {
+        rustix::fs::renameat(directory, temporary.as_str(), directory, name).map_err(failure)
+    });
     if result.is_err() {
-        let _ = fs::remove_file(temporary);
+        let _ = rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty());
     }
-    result.map_err(failure)
+    result
+}
+
+fn read_frame_at(directory: &fs::File, name: &str) -> Result<Value, DurableRunnerError> {
+    let file = fs::File::from(
+        rustix::fs::openat(
+            directory,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(failure)?,
+    );
+    read_frame_file(file)
 }
 
 fn read_frame(path: &Path) -> Result<Value, DurableRunnerError> {
@@ -68,6 +142,10 @@ fn read_frame(path: &Path) -> Result<Value, DurableRunnerError> {
         )
         .map_err(failure)?,
     );
+    read_frame_file(file)
+}
+
+fn read_frame_file(file: fs::File) -> Result<Value, DurableRunnerError> {
     let metadata = file.metadata().map_err(failure)?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
         return Err(failure("notification frame must be a private regular file"));
@@ -109,7 +187,7 @@ pub struct RuntimeNotifications {
 impl RuntimeNotifications {
     pub fn bind(state_dir: &Path) -> Result<Self, DurableRunnerError> {
         verify_private_directory(state_dir)?;
-        let local = MailboxDirectory::create(&std::env::temp_dir()).map_err(failure)?;
+        let local = MailboxDirectory::create(&std::env::temp_dir())?;
         let path = context_path(state_dir);
         write_frame(&path, &json!({"mailbox": local.directory}))?;
         Ok(Self {
@@ -132,57 +210,80 @@ impl RuntimeNotifications {
             self.context = Uuid::new_v4().to_string();
             self.activated.clear();
         }
-        let Ok(entries) = fs::read_dir(&self.local.directory) else {
+        let Ok(entries) = rustix::fs::Dir::read_from(&self.local.handle) else {
             return;
         };
         for entry in entries.take(16).flatten() {
-            let directory = entry.path();
-            if verify_private_directory(&directory).is_err() {
+            let name = entry.file_name();
+            if matches!(name.to_bytes(), b"." | b"..") {
                 continue;
             }
+            let Ok(directory) = open_directory_at(&self.local.handle, name) else {
+                continue;
+            };
             // A killed publisher must not leave a mailbox that starves later requests.
-            if fs::metadata(&directory)
+            if directory
+                .metadata()
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|time| time.elapsed().ok())
                 .is_some_and(|age| age > Duration::from_secs(2))
             {
-                let _ = fs::remove_dir_all(&directory);
-                continue;
-            }
-            let path = directory.join("processing.json");
-            // Claim only an atomically published frame; a concurrent publisher may still be writing.
-            if fs::rename(directory.join("request.json"), &path).is_err() {
-                continue;
-            }
-            let request = read_frame(&path)
-                .ok()
-                .and_then(|value| serde_json::from_value::<Request>(value).ok());
-            let _ = fs::remove_file(path);
-            let Some(request) = request.filter(|request| request.jsonrpc == "2.0") else {
-                continue;
-            };
-            let result = if state.lifecycle != "ready" || state.warm_transition.is_some() {
-                Err(DurableRunnerError::invalid(
-                    "runtime authority is not active",
-                ))
-            } else {
-                self.handle(
-                    request.method.as_str(),
-                    request.params,
-                    config,
-                    state,
-                    store,
-                )
-            };
-            let reply = match result {
-                Ok(result) => json!({"jsonrpc":"2.0", "id":request.id, "result":result}),
-                Err(_) => {
-                    json!({"jsonrpc":"2.0", "id":request.id, "error":{"code":-32602,"message":"notification rejected"}})
+                if let Ok(files) = rustix::fs::Dir::read_from(&directory) {
+                    for entry in files.take(16).flatten() {
+                        let _ = rustix::fs::unlinkat(
+                            &directory,
+                            entry.file_name(),
+                            rustix::fs::AtFlags::empty(),
+                        );
+                    }
                 }
-            };
-            let _ = write_frame(&directory.join("reply.json"), &reply);
+                let _ =
+                    rustix::fs::unlinkat(&self.local.handle, name, rustix::fs::AtFlags::REMOVEDIR);
+                continue;
+            }
+            self.process_request(&directory, config, state, store);
         }
+    }
+
+    fn process_request(
+        &mut self,
+        directory: &fs::File,
+        config: &DurableRunnerConfig,
+        state: &mut DurableState,
+        store: &DurableStateStore,
+    ) {
+        // All operations stay relative to the opened directory, even if its pathname is swapped.
+        if rustix::fs::renameat(directory, "request.json", directory, "processing.json").is_err() {
+            return;
+        }
+        let request = read_frame_at(directory, "processing.json")
+            .ok()
+            .and_then(|value| serde_json::from_value::<Request>(value).ok());
+        let _ = rustix::fs::unlinkat(directory, "processing.json", rustix::fs::AtFlags::empty());
+        let Some(request) = request.filter(|request| request.jsonrpc == "2.0") else {
+            return;
+        };
+        let result = if state.lifecycle != "ready" || state.warm_transition.is_some() {
+            Err(DurableRunnerError::invalid(
+                "runtime authority is not active",
+            ))
+        } else {
+            self.handle(
+                request.method.as_str(),
+                request.params,
+                config,
+                state,
+                store,
+            )
+        };
+        let reply = match result {
+            Ok(result) => json!({"jsonrpc":"2.0", "id":request.id, "result":result}),
+            Err(_) => {
+                json!({"jsonrpc":"2.0", "id":request.id, "error":{"code":-32602,"message":"notification rejected"}})
+            }
+        };
+        let _ = write_frame_at(directory, "reply.json", &reply);
     }
 
     fn handle(
@@ -311,6 +412,7 @@ pub fn run_cli(args: &[String]) -> Result<(), DurableRunnerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::create_private_temporary_file;
     use std::thread;
 
     fn config(path: PathBuf) -> DurableRunnerConfig {
@@ -462,6 +564,61 @@ context=$("$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notification-context) || exit
         assert_eq!(response["result"]["exitCode"], 0, "publisher: {response}");
         assert_eq!(state.outbox.len(), 1);
         assert_eq!(state.outbox[0].envelope["payload"]["runId"], config.run_id);
+    }
+
+    #[test]
+    fn mailbox_directory_swap_cannot_redirect_reads_writes_or_cleanup() {
+        let root = MailboxDirectory::create(&std::env::temp_dir()).unwrap();
+        let config = config(root.directory.clone());
+        let store = DurableStateStore::new(&config.state_dir).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        state.lifecycle = "ready".into();
+        let mut server = RuntimeNotifications::bind(&config.state_dir).unwrap();
+        server.poll(&config, &mut state, &store);
+        let client = MailboxDirectory::create(&server.local.directory).unwrap();
+        write_frame_at(
+            &client.handle,
+            "request.json",
+            &json!({"jsonrpc":"2.0","id":1,"method":"taskPanel/context","params":{}}),
+        )
+        .unwrap();
+        // Capture the exact production directory handle before the provider swaps its pathname.
+        let opened =
+            open_directory_at(&server.local.handle, client.directory.file_name().unwrap()).unwrap();
+        let moved = client.directory.with_extension("held");
+        fs::rename(&client.directory, &moved).unwrap();
+        let target = config.state_dir.join("protected");
+        fs::create_dir(&target).unwrap();
+        let protected_request =
+            json!({"jsonrpc":"2.0","id":999,"method":"taskPanel/context","params":{}}).to_string();
+        fs::write(target.join("request.json"), &protected_request).unwrap();
+        fs::write(target.join("reply.json"), b"protected-reply").unwrap();
+        std::os::unix::fs::symlink(&target, &client.directory).unwrap();
+        server.process_request(&opened, &config, &mut state, &store);
+        assert_eq!(read_frame_at(&opened, "reply.json").unwrap()["id"], 1);
+        assert!(
+            read_frame_at(&opened, "reply.json").unwrap()["result"]["context"]
+                .as_str()
+                .is_some()
+        );
+        assert_eq!(
+            fs::read(target.join("request.json")).unwrap(),
+            protected_request.as_bytes()
+        );
+        assert_eq!(
+            fs::read(target.join("reply.json")).unwrap(),
+            b"protected-reply"
+        );
+        // Expiry cleans the original object; the replacement symlink is never entered.
+        let old = std::time::SystemTime::now() - Duration::from_secs(3);
+        opened
+            .set_times(fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        server.poll(&config, &mut state, &store);
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 2);
+        assert!(state.outbox.is_empty());
+        assert!(!moved.exists());
+        fs::remove_file(&client.directory).unwrap();
     }
 
     #[test]
