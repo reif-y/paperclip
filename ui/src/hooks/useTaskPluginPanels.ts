@@ -33,7 +33,8 @@ export function useTaskPluginPanels(issue: Issue | null | undefined, enabled = t
     queryFn: () => heartbeatsApi.liveRunsForIssue(issue!.id),
     enabled: savedTask && slots.length > 0 && !errorMessage,
     refetchInterval: connected ? false : 3000,
-    retry: false,
+    retry: (failures: number, error: Error) => failures < 2 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
+    retryDelay: 1000,
   });
   const run = runs?.find(run => run.status === "running"
     && (!issue?.executionRunId || run.id === issue.executionRunId));
@@ -50,7 +51,8 @@ export function useTaskPluginPanels(issue: Issue | null | undefined, enabled = t
       return missing.length ? [...next, ...missing] : next;
     },
     enabled: active,
-    retry: false,
+    retry: (failures: number, error: Error) => failures < 2 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
+    retryDelay: 1000,
   });
   const stream = useTranscriptLiveStream(active ? [run!.id] : [], { companyId: issue?.companyId, enabled: active }, event => {
     if (!active || !run || event.companyId !== issue?.companyId || event.payload.runId !== run.id

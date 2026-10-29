@@ -276,16 +276,24 @@ context=$("$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notification-context)
 Runner publishes its matching executable as host-owned
 `PAPERCLIP_RUNTIME_NOTIFICATION_HELPER`; clients invoke that absolute path and
 need no Runner command on `PATH`. Configured task environment cannot override it.
+Runner preserves both discovery variables at final provider command boundaries.
+For Codex, it adds read access to those two exact files and write access to the
+dedicated IPC directory, preserving the existing filesystem and network limits;
+it never grants access to the enclosing Runner state directory.
 
 Runner supplies `PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT`, a stable path to its
 local notification endpoint descriptor. The helper uses bounded JSON-RPC over a
-private Unix socket. It does not parse stdout/stderr or take a run ID. Runner
+private filesystem mailbox (2 KiB frames, at most 16 entries per control-loop
+iteration and a 500 ms client deadline). Per-request directories are private,
+atomically published and cleaned on completion or timeout; abandoned requests
+expire after two seconds. It does not parse stdout/stderr or take a run ID. Runner
 rejects contexts from earlier warm attachments or process lifetimes and persists
 `task.panel.activated` with `{ pluginKey, slotId }` through its existing
 authenticated PRP event stream before acknowledging. The wrapper treats this
 optional hint as best effort; missing/older runners must not fail the operation.
 Do not notify for help, schema discovery, status probes or failures. No agent
-instruction is required. This is a UI hint; plugin discovery, authorization and
+instruction is required. Identifiers are 1–160 Unicode code points, excluding
+C0 controls and DEL, consistently with all PRP schemas. This is a UI hint; plugin discovery, authorization and
 availability checks still apply. Only installed agent task-panel slots can be
 restored from history, and only ready contributions can render.
 
@@ -293,7 +301,8 @@ The host reads durable activations on mount and reconnect. For activated views i
 replaces `:entityId` with the running agent ID, adds `runId` and `issueId` query
 parameters, and checks for `{ available: true }`. It makes at most three readiness
 attempts per activation/recovery, then stops. There is no periodic panel readiness
-poll. A first use that happened before the task page opened is restored from the
+poll. Transient live-run/history failures also get at most three attempts per
+read/recovery; authorization failures are not retried. A first use that happened before the task page opened is restored from the
 saved run event. A later run must produce its own activation, even when a provider
 process or an agent's view stays warm. Only the matching task and running agent
 can contribute a panel. Notifications are deduplicated per panel and run, and

@@ -6,7 +6,7 @@ export interface TaskPanelActivation { pluginKey: string; slotId: string }
 
 export function taskPanelActivation(payload: Record<string, unknown> | null): TaskPanelActivation | null {
   const valid = (value: unknown): value is string => typeof value === "string" && value.length > 0
-    && value.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
+    && Array.from(value).length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
   return payload && Object.keys(payload).length === 2 && valid(payload.pluginKey) && valid(payload.slotId)
     ? { pluginKey: payload.pluginKey, slotId: payload.slotId } : null;
 }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, LiveEvent } from "@paperclipai/shared";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
 import { heartbeatsApi, type LiveRunForIssue } from "@/api/heartbeats";
 import { queryKeys } from "@/lib/queryKeys";
 import type { ResolvedPluginSlot } from "@/plugins/slots";
@@ -181,4 +181,26 @@ it("bounds readiness retries to three attempts after an activation", async () =>
   expect(get).toHaveBeenCalledTimes(3); expect(current).toEqual([]);
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
   expect(get).toHaveBeenCalledTimes(3);
+});
+
+it.each(["runs", "history"])("recovers from a transient %s read without recurring polling", async source => {
+  vi.useFakeTimers();
+  const error = new ApiError("Unavailable", 500, {});
+  if (source === "runs") list.mockRejectedValueOnce(error);
+  else history.mockRejectedValueOnce(error);
+  await render();
+  expect(current).toEqual([]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+  expect(current).toHaveLength(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(source === "runs" ? list : history).toHaveBeenCalledTimes(2);
+});
+it.each([500, 403])("bounds failed discovery reads for HTTP %s", async status => {
+  vi.useFakeTimers();
+  list.mockRejectedValue(new ApiError("Unavailable", status, {}));
+  await render();
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(list).toHaveBeenCalledTimes(status === 500 ? 3 : 1);
+  expect(history).not.toHaveBeenCalled();
+  expect(current).toEqual([]);
 });
