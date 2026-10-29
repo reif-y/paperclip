@@ -2,7 +2,7 @@
 use std::collections::HashSet;
 use std::fs::{self, DirBuilder};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::durable::{
-    create_private_temporary_file, open_private_regular_file, verify_private_directory,
-    DurableRunnerConfig, DurableRunnerError, DurableState, DurableStateStore, EventPriority,
+    create_private_temporary_file, verify_private_directory, DurableRunnerConfig,
+    DurableRunnerError, DurableState, DurableStateStore, EventPriority,
 };
 
 pub const CONTEXT_ENV: &str = "PAPERCLIP_RUNTIME_NOTIFICATION_CONTEXT";
@@ -57,13 +57,23 @@ fn write_frame(path: &Path, frame: &Value) -> Result<(), DurableRunnerError> {
 }
 
 fn read_frame(path: &Path) -> Result<Value, DurableRunnerError> {
-    if !fs::symlink_metadata(path).map_err(failure)?.is_file() {
-        return Err(failure("notification frame must be a regular file"));
+    let file = fs::File::from(
+        rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(failure)?,
+    );
+    let metadata = file.metadata().map_err(failure)?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(failure("notification frame must be a private regular file"));
     }
     let mut bytes = Vec::new();
-    open_private_regular_file(path)
-        .map_err(failure)?
-        .take(MAX_FRAME as u64 + 1)
+    file.take(MAX_FRAME as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(failure)?;
     if bytes.len() > MAX_FRAME {
@@ -140,7 +150,11 @@ impl RuntimeNotifications {
                 let _ = fs::remove_dir_all(&directory);
                 continue;
             }
-            let path = directory.join("request.json");
+            let path = directory.join("processing.json");
+            // Claim only an atomically published frame; a concurrent publisher may still be writing.
+            if fs::rename(directory.join("request.json"), &path).is_err() {
+                continue;
+            }
             let request = read_frame(&path)
                 .ok()
                 .and_then(|value| serde_json::from_value::<Request>(value).ok());
@@ -451,6 +465,31 @@ context=$("$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notification-context) || exit
     }
 
     #[test]
+    fn mailbox_waits_for_complete_atomic_publication() {
+        let root = MailboxDirectory::create(&std::env::temp_dir()).unwrap();
+        let config = config(root.directory.clone());
+        let store = DurableStateStore::new(&config.state_dir).unwrap();
+        let (mut state, _) = store.load_or_create(&config).unwrap();
+        state.lifecycle = "ready".into();
+        let mut server = RuntimeNotifications::bind(&config.state_dir).unwrap();
+        let client = MailboxDirectory::create(&server.local.directory).unwrap();
+        let request = client.directory.join("request.json");
+        let (temporary, mut file) = create_private_temporary_file(&request).unwrap();
+        file.write_all(b"{").unwrap();
+        server.poll(&config, &mut state, &store);
+        assert!(temporary.is_file());
+        assert!(!client.directory.join("reply.json").exists());
+        file.write_all(br#""jsonrpc":"2.0","id":1,"method":"taskPanel/context","params":{}}"#)
+            .unwrap();
+        fs::rename(temporary, &request).unwrap();
+        server.poll(&config, &mut state, &store);
+        let reply = read_frame(&client.directory.join("reply.json")).unwrap();
+        assert!(reply["result"]["context"].as_str().is_some());
+        assert!(!request.exists());
+        assert!(state.outbox.is_empty());
+    }
+
+    #[test]
     fn mailbox_frames_are_bounded_private_and_cleaned_after_timeout() {
         let root = MailboxDirectory::create(&std::env::temp_dir()).unwrap();
         let config = config(root.directory.clone());
@@ -461,6 +500,14 @@ context=$("$PAPERCLIP_RUNTIME_NOTIFICATION_HELPER" notification-context) || exit
         let path = client.directory.join("request.json");
         assert!(write_frame(&path, &json!("x".repeat(MAX_FRAME))).is_err());
         fs::write(&path, "x".repeat(MAX_FRAME + 1)).unwrap();
+        assert!(read_frame(&path).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
         assert!(read_frame(&path).is_err());
         fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(config.state_dir.join("runner-state.json"), &path).unwrap();
