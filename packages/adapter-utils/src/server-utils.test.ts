@@ -38,6 +38,7 @@ import {
   signalRunningProcess,
   shapePaperclipWorkspaceEnvForExecution,
   rewriteWorkspaceCwdEnvVarsForExecution,
+  STDIN_HANDOFF_MAX_WAIT_MS,
   stringifyPaperclipWakePayload,
   UNMANAGED_BACKGROUND_TASK_LIVENESS_REASON,
   UNMANAGED_BACKGROUND_TASK_STOP_REASON,
@@ -677,6 +678,32 @@ describe("runChildProcess", () => {
     expect(result.stdout).toBe("hello from stdin");
     expect(onSpawnCompletedAt).toBeGreaterThanOrEqual(startedAt + spawnDelayMs);
     expect(finishedAt - startedAt).toBeGreaterThanOrEqual(spawnDelayMs);
+  });
+
+  it("sends stdin after a bounded wait when onSpawn is slow", async () => {
+    // A child that, like `claude -p`, gives up if stdin stays empty too long.
+    const childGiveUpMs = STDIN_HANDOFF_MAX_WAIT_MS + 1_500;
+    const result = await runChildProcess(
+      randomUUID(),
+      process.execPath,
+      [
+        "-e",
+        `let data='';const t=setTimeout(()=>{process.stderr.write('no stdin');process.exit(1)},${childGiveUpMs});process.stdin.setEncoding('utf8');process.stdin.on('data',c=>{clearTimeout(t);data+=c});process.stdin.on('end',()=>process.stdout.write(data));`,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {},
+        stdin: "prompt survives slow pid write",
+        timeoutSec: 10,
+        graceSec: 1,
+        onLog: async () => {},
+        // The pid write outlasts the child's patience, as under DB load.
+        onSpawn: () => new Promise<void>((resolve) => setTimeout(resolve, childGiveUpMs + 2_000)),
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("prompt survives slow pid write");
   });
 
   it.skipIf(process.platform === "win32")(

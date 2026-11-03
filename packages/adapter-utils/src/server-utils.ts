@@ -179,6 +179,8 @@ const PAPERCLIP_SKILL_ROOT_RELATIVE_CANDIDATES = [
 const MATERIALIZED_SKILL_SENTINEL = ".paperclip-materialized-skill.json";
 const MATERIALIZED_SKILL_LOCK_OWNER = "owner.json";
 const MATERIALIZED_SKILL_LOCK_STALE_MS = 30_000;
+/** Longest the stdin handoff waits for onSpawn (pid persistence) before writing anyway. */
+export const STDIN_HANDOFF_MAX_WAIT_MS = 1_000;
 
 function expandHomePrefix(value: string): string {
   if (value === "~") return os.homedir();
@@ -4928,7 +4930,18 @@ export async function runChildProcess(
 
         const stdin = child.stdin;
         if (opts.stdin != null && stdin) {
-          void spawnPersistPromise.finally(() => {
+          // Prefer recording the pid before the handoff, but never hold stdin
+          // longer than STDIN_HANDOFF_MAX_WAIT_MS: CLIs such as `claude -p`
+          // give up on an empty stdin pipe after ~3s, so a slow pid write
+          // under DB load would otherwise fail the run with "Input must be
+          // provided" even though the prompt was ready.
+          let handoffTimer: ReturnType<typeof setTimeout> | null = null;
+          const handoffDeadline = new Promise<void>((resolve) => {
+            handoffTimer = setTimeout(resolve, STDIN_HANDOFF_MAX_WAIT_MS);
+            handoffTimer.unref?.();
+          });
+          void Promise.race([spawnPersistPromise, handoffDeadline]).finally(() => {
+            if (handoffTimer) clearTimeout(handoffTimer);
             if (child.killed || stdin.destroyed) return;
             stdin.write(opts.stdin as string);
             stdin.end();
